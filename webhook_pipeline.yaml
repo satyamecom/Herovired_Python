@@ -1,0 +1,351 @@
+pipeline {
+    agent any
+    tools {
+        gradle 'gradle7'
+        jdk 'Java_8'
+    }
+    
+    
+    parameters {
+        choice(
+            choices: ['webhook-api-handler','webhook-event-management','webhook-schedular-service',
+'webhook_bag_inscan','webhook_customer_testing','webhook_manifestation','webhook_service',
+'webhook_shipment_history_testing','webhook_shipment_lifecycle','webhook_event_archival_consumer_service','Webhook_sftp_consumer_service'],
+            description: 'Select the pipeline to execute',
+            name: 'SelectPipeline'
+        )
+    }
+    stages{
+        stage('Git Checkout') {
+               steps {
+                   script {
+                    git branch: 'master',
+                       credentialsId: '7b1c3cde-3697-4258-95c7-11fe2c5e6e67',
+                       url: 'http://VANKAYALAPATI@172.31.0.93:7990/scm/jass/webhook.git'
+                }
+            }
+   }
+   stage('Check Versions'){
+       steps{
+            script{       
+       echo "Java Version:"
+       sh "java -version"
+   }}}
+   stage('Gradle Compile,Build and deploy on EKS') {
+        steps {
+            script {
+                def SelectPipeline = "${params.SelectPipeline}"
+                // Call the selected child pipeline
+                if (SelectPipeline == 'webhook-api-handler') {
+                sh 'sudo cp /mnt/webhook-api-handler/bootstrap.properties /var/lib/jenkins/workspace/Webhook-ALL/webhook-api-handler-service/src/main/resources/bootstrap.properties'
+                sh 'sudo cp /mnt/webhook-api-handler/logback.xml /var/lib/jenkins/workspace/Webhook-ALL/webhook-api-handler-service/src/main/resources/logback.xml'
+                sh 'cd /var/lib/jenkins/workspace/Webhook-ALL && sudo ./gradlew webhook-api-handler-service:bootjar'
+                sh 'sudo rm -rf /mnt/webhook-api-handler/webhook-api-handler-service-0.0.1-SNAPSHOT.jar && sudo cp /var/lib/jenkins/workspace/Webhook-ALL/webhook-api-handler-service/build/libs/*.jar /mnt/webhook-api-handler/ && sudo chown jenkins. /mnt/webhook-api-handler/*.jar '
+                sh 'aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 722124002401.dkr.ecr.ap-south-1.amazonaws.com && cd /mnt/webhook-api-handler && sudo docker build --no-cache -t webhook-api-handler -f dockerfile .'
+                sh 'docker tag webhook-api-handler:latest 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook-api-handler:$(aws ecr describe-images --repository-name webhook-api-handler  --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\') && docker push 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook-api-handler:$(aws ecr describe-images --repository-name webhook-api-handler --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\')'
+
+                sh 'aws eks update-kubeconfig --name sd2-midmile-consumer --region ap-south-1'
+                sh 'kubectl get ns'
+                sh '''
+                #!/bin/bash
+                cd /mnt/webhook-api-handler/
+                get_cur_ver=`cat deployment.yaml |grep "image:"|awk -F":" '{print $NF}'` 
+                ecr_ver=`sudo aws ecr describe-images --repository-name webhook-api-handler --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageTags[0]'|tr -d '"'`
+                if awk "BEGIN {exit ! ($ecr_ver > $get_cur_ver)}"
+                then
+                sed -i 's/:'"$get_cur_ver"'/:'"$ecr_ver"'/g' deployment.yaml
+                kubectl apply -f deployment.yaml -n webhook
+                echo "Yes Version is updated successfully"
+                else
+                echo "Version not Updated"
+                exit
+                fi
+                exit 0
+                << EOF
+                ''' 
+                sh '''
+                #!/usr/bin/bash
+                sudo ssh -i /opt/key.pem ubuntu@172.31.9.221 << EOF
+                sudo -i
+                cd /opt/yaml/webhook-api-handler
+                bash version_upgrade.sh
+                exit 0
+                <<EOF
+                '''
+
+                }else if (SelectPipeline == 'webhook-event-management'){
+                sh 'sudo cp /mnt/webhook-event-management/bootstrap.properties /var/lib/jenkins/workspace/Webhook-ALL/webhook-event-management-service/src/main/resources/bootstrap.properties'
+                sh 'sudo cp /mnt/webhook-event-management/logback.xml /var/lib/jenkins/workspace/Webhook-ALL/webhook-event-management-service/src/main/resources/logback.xml'
+                sh 'cd /var/lib/jenkins/workspace/Webhook-ALL && sudo ./gradlew webhook-event-management-service:bootjar'
+                sh 'sudo rm -rf /mnt/webhook-event-management/webhook-event-management-service-0.0.1-SNAPSHOT.jar && sudo cp /var/lib/jenkins/workspace/Webhook-ALL/webhook-event-management-service/build/libs/*.jar /mnt/webhook-event-management/ && sudo chown jenkins. /mnt/webhook-event-management/*.jar '
+                sh 'aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 722124002401.dkr.ecr.ap-south-1.amazonaws.com && cd /mnt/webhook-event-management && sudo docker build --no-cache -t webhook-event-management -f Dockerfile .'
+                sh 'docker tag webhook-event-management:latest 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook-event-management:$(aws ecr describe-images --repository-name webhook-event-management  --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\') && docker push 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook-event-management:$(aws ecr describe-images --repository-name webhook-event-management --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\')'
+                sh 'aws eks update-kubeconfig --name sd2-midmile-consumer --region ap-south-1'
+                sh 'kubectl get ns'
+                sh '''
+                #!/bin/bash
+                cd /mnt/webhook-event-management/
+                get_cur_ver=`cat deployment.yaml |grep "image:"|awk -F":" '{print $NF}'` 
+                ecr_ver=`sudo aws ecr describe-images --repository-name webhook-event-management --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageTags[0]'|tr -d '"'`
+                if awk "BEGIN {exit ! ($ecr_ver > $get_cur_ver)}"
+                then
+                sed -i 's/:'"$get_cur_ver"'/:'"$ecr_ver"'/g' deployment.yaml
+                kubectl apply -f deployment.yaml -n webhook
+                echo "Yes Version is updated successfully"
+                else
+                echo "Version not Updated"
+                exit
+                fi
+                exit 0
+                << EOF
+                '''
+                }else if (SelectPipeline == 'webhook-schedular-service'){
+                sh 'sudo cp /mnt/webhook-schedular-service/bootstrap.properties /var/lib/jenkins/workspace/Webhook-ALL/webhook_schedular_service/src/main/resources/bootstrap.properties'
+                sh 'sudo cp /mnt/webhook-schedular-service/logback.xml /var/lib/jenkins/workspace/Webhook-ALL/webhook_schedular_service/src/main/resources/logback.xml'
+                sh 'cd /var/lib/jenkins/workspace/Webhook-ALL && sudo ./gradlew webhook_schedular_service:bootjar'
+                sh 'sudo rm -rf /mnt/webhook-schedular-service/webhook_schedular_service-0.0.1-SNAPSHOT.jar && sudo cp /var/lib/jenkins/workspace/Webhook-ALL/webhook_schedular_service/build/libs/*.jar /mnt/webhook-schedular-service/ && sudo chown jenkins. /mnt/webhook-schedular-service/*.jar '
+                sh 'aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 722124002401.dkr.ecr.ap-south-1.amazonaws.com && cd /mnt/webhook-schedular-service && sudo docker build --no-cache -t webhook-schedular-service -f Dockerfile .'
+                sh 'docker tag webhook-schedular-service:latest 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook-schedular-service:$(aws ecr describe-images --repository-name webhook-schedular-service  --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\') && docker push 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook-schedular-service:$(aws ecr describe-images --repository-name webhook-schedular-service --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\')'
+                sh 'aws eks update-kubeconfig --name sd2-midmile-consumer --region ap-south-1'
+                sh 'kubectl get ns'
+                sh '''
+                #!/bin/bash
+                cd /mnt/webhook-schedular-service/
+                get_cur_ver=`cat deployment.yaml |grep "image:"|awk -F":" '{print $NF}'` 
+                ecr_ver=`sudo aws ecr describe-images --repository-name webhook-schedular-service --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageTags[0]'|tr -d '"'`
+                if awk "BEGIN {exit ! ($ecr_ver > $get_cur_ver)}"
+                then
+                sed -i 's/:'"$get_cur_ver"'/:'"$ecr_ver"'/g' deployment.yaml
+                kubectl apply -f deployment.yaml -n webhook
+                echo "Yes Version is updated successfully"
+                else
+                echo "Version not Updated"
+                exit
+                fi
+                exit 0
+                << EOF
+                '''
+                }else if (SelectPipeline == 'webhook_bag_inscan'){
+                sh 'sudo cp /mnt/webhook_bag_inscan/bootstrap.properties /var/lib/jenkins/workspace/Webhook-ALL/webhook_bag_inscan_kafka_consumer_service/src/main/resources/bootstrap.properties'
+                sh 'sudo cp /mnt/webhook_bag_inscan/logback.xml /var/lib/jenkins/workspace/Webhook-ALL/webhook_bag_inscan_kafka_consumer_service/src/main/resources/logback.xml'
+                sh 'cd /var/lib/jenkins/workspace/Webhook-ALL && sudo ./gradlew webhook_bag_inscan_kafka_consumer_service:bootjar'
+                sh 'sudo rm -rf /mnt/webhook_bag_inscan/webhook_bag_inscan_kafka_consumer_service-0.0.1-SNAPSHOT.jar && sudo cp /var/lib/jenkins/workspace/Webhook-ALL/webhook_bag_inscan_kafka_consumer_service/build/libs/*.jar /mnt/webhook_bag_inscan/ && sudo chown jenkins. /mnt/webhook_bag_inscan/*.jar '
+                sh 'aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 722124002401.dkr.ecr.ap-south-1.amazonaws.com && cd /mnt/webhook_bag_inscan && sudo docker build --no-cache -t webhook_bag_inscan -f Dockerfile .'
+                sh 'docker tag webhook_bag_inscan:latest 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_bag_inscan:$(aws ecr describe-images --repository-name webhook_bag_inscan  --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\') && docker push 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_bag_inscan:$(aws ecr describe-images --repository-name webhook_bag_inscan --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\')'
+                sh 'aws eks update-kubeconfig --name sd2-midmile-consumer --region ap-south-1'
+                sh 'kubectl get ns'
+                sh '''
+                #!/bin/bash
+                cd /mnt/webhook_bag_inscan/
+                get_cur_ver=`cat deployment.yaml |grep "image:"|awk -F":" '{print $NF}'` 
+                ecr_ver=`sudo aws ecr describe-images --repository-name webhook_bag_inscan --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageTags[0]'|tr -d '"'`
+                if awk "BEGIN {exit ! ($ecr_ver > $get_cur_ver)}"
+                then
+                sed -i 's/:'"$get_cur_ver"'/:'"$ecr_ver"'/g' deployment.yaml
+                kubectl apply -f deployment.yaml -n webhook
+                echo "Yes Version is updated successfully"
+                else
+                echo "Version not Updated"
+                exit
+                fi
+                exit 0
+                << EOF
+                '''
+                }else if (SelectPipeline == 'webhook_customer_testing'){
+                sh 'sudo cp /mnt/webhook_customer_testing/bootstrap.properties /var/lib/jenkins/workspace/Webhook-ALL/webhook_customer_testing/src/main/resources/bootstrap.properties'
+                sh 'sudo cp /mnt/webhook_customer_testing/logback.xml /var/lib/jenkins/workspace/Webhook-ALL/webhook_customer_testing/src/main/resources/logback.xml'
+                sh 'cd /var/lib/jenkins/workspace/Webhook-ALL && sudo ./gradlew webhook_customer_testing:bootjar'
+                sh 'sudo rm -rf /mnt/webhook_customer_testing/webhook_customer_testing-0.0.1-SNAPSHOT.jar && sudo cp /var/lib/jenkins/workspace/Webhook-ALL/webhook_customer_testing/build/libs/*.jar /mnt/webhook_customer_testing/ && sudo chown jenkins. /mnt/webhook_customer_testing/*.jar '
+                sh 'aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 722124002401.dkr.ecr.ap-south-1.amazonaws.com && cd /mnt/webhook_customer_testing && sudo docker build --no-cache -t webhook_customer_testing -f Dockerfile .'
+                sh 'docker tag webhook_customer_testing:latest 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_customer_testing:$(aws ecr describe-images --repository-name webhook_customer_testing  --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\') && docker push 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_customer_testing:$(aws ecr describe-images --repository-name webhook_customer_testing --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\')'
+                sh 'aws eks update-kubeconfig --name sd2-midmile-consumer --region ap-south-1'
+                sh 'kubectl get ns'
+                sh '''
+                #!/bin/bash
+                cd /mnt/webhook_customer_testing/
+                get_cur_ver=`cat deployment.yaml |grep "image:"|awk -F":" '{print $NF}'` 
+                ecr_ver=`sudo aws ecr describe-images --repository-name webhook_customer_testing --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageTags[0]'|tr -d '"'`
+                if awk "BEGIN {exit ! ($ecr_ver > $get_cur_ver)}"
+                then
+                sed -i 's/:'"$get_cur_ver"'/:'"$ecr_ver"'/g' deployment.yaml
+                kubectl apply -f deployment.yaml -n sd2-mmc
+                echo "Yes Version is updated successfully"
+                else
+                echo "Version not Updated"
+                exit
+                fi
+                exit 0
+                << EOF
+                '''
+                }else if (SelectPipeline == 'webhook_manifestation'){
+                sh 'sudo cp /mnt/webhook_manifestation/bootstrap.properties /var/lib/jenkins/workspace/Webhook-ALL/webhook_manifestation_kafka_consumer_service/src/main/resources/bootstrap.properties'
+                sh 'sudo cp /mnt/webhook_manifestation/logback.xml /var/lib/jenkins/workspace/Webhook-ALL/webhook_manifestation_kafka_consumer_service/src/main/resources/logback.xml'
+                sh 'cd /var/lib/jenkins/workspace/Webhook-ALL && sudo ./gradlew webhook_manifestation_kafka_consumer_service:bootjar'
+                sh 'sudo rm -rf /mnt/webhook_manifestation/webhook_manifestation_kafka_consumer_service-0.0.1-SNAPSHOT.jar && sudo cp /var/lib/jenkins/workspace/Webhook-ALL/webhook_manifestation_kafka_consumer_service/build/libs/*.jar /mnt/webhook_manifestation/ && sudo chown jenkins. /mnt/webhook_manifestation/*.jar '
+                sh 'aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 722124002401.dkr.ecr.ap-south-1.amazonaws.com && cd /mnt/webhook_manifestation && sudo docker build --no-cache -t webhook_manifestation -f Dockerfile .'
+                sh 'docker tag webhook_manifestation:latest 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_manifestation:$(aws ecr describe-images --repository-name webhook_manifestation  --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\') && docker push 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_manifestation:$(aws ecr describe-images --repository-name webhook_manifestation --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\')'
+                sh 'aws eks update-kubeconfig --name sd2-midmile-consumer --region ap-south-1'
+                sh 'kubectl get ns'
+                sh '''
+                #!/bin/bash
+                cd /mnt/webhook_manifestation/
+                get_cur_ver=`cat deployment.yaml |grep "image:"|awk -F":" '{print $NF}'` 
+                ecr_ver=`sudo aws ecr describe-images --repository-name webhook_manifestation --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageTags[0]'|tr -d '"'`
+                if awk "BEGIN {exit ! ($ecr_ver > $get_cur_ver)}"
+                then
+                sed -i 's/:'"$get_cur_ver"'/:'"$ecr_ver"'/g' deployment.yaml
+                kubectl apply -f deployment.yaml -n webhook
+                echo "Yes Version is updated successfully"
+                else
+                echo "Version not Updated"
+                exit
+                fi
+                exit 0
+                << EOF
+                '''
+                }else if (SelectPipeline == 'webhook_service'){
+                sh 'sudo cp /mnt/webhook_service/bootstrap.properties /var/lib/jenkins/workspace/Webhook-ALL/webhook_service/src/main/resources/bootstrap.properties'
+                sh 'sudo cp /mnt/webhook_service/logback.xml /var/lib/jenkins/workspace/Webhook-ALL/webhook_service/src/main/resources/logback.xml'
+                sh 'cd /var/lib/jenkins/workspace/Webhook-ALL && sudo ./gradlew webhook_service:bootjar'
+                sh 'sudo rm -rf /mnt/webhook_service/webhook_service-0.0.1-SNAPSHOT.jar && sudo cp /var/lib/jenkins/workspace/Webhook-ALL/webhook_service/build/libs/*.jar /mnt/webhook_service/ && sudo chown jenkins. /mnt/webhook_service/*.jar '
+                sh 'aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 722124002401.dkr.ecr.ap-south-1.amazonaws.com && cd /mnt/webhook_service && sudo docker build --no-cache -t webhook_service -f Dockerfile .'
+                sh 'docker tag webhook_service:latest 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_service:$(aws ecr describe-images --repository-name webhook_service  --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\') && docker push 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_service:$(aws ecr describe-images --repository-name webhook_service --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\')'
+                sh 'aws eks update-kubeconfig --name sd2-midmile-consumer --region ap-south-1'
+                sh 'kubectl get ns'
+                sh '''
+                #!/bin/bash
+                cd /mnt/webhook_service/
+                get_cur_ver=`cat deployment.yaml |grep "image:"|awk -F":" '{print $NF}'` 
+                ecr_ver=`sudo aws ecr describe-images --repository-name webhook_service --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageTags[0]'|tr -d '"'`
+                if awk "BEGIN {exit ! ($ecr_ver > $get_cur_ver)}"
+                then
+                sed -i 's/:'"$get_cur_ver"'/:'"$ecr_ver"'/g' deployment.yaml
+                kubectl apply -f deployment.yaml -n webhook
+                echo "Yes Version is updated successfully"
+                else
+                echo "Version not Updated"
+                exit
+                fi
+                exit 0
+                << EOF
+                '''
+                }else if (SelectPipeline == 'webhook_shipment_history_testing'){
+                sh 'sudo cp /mnt/webhook_shipment_history_testing/bootstrap.properties /var/lib/jenkins/workspace/Webhook-ALL/webhook_shipment_history_testing/src/main/resources/bootstrap.properties'
+                sh 'sudo cp /mnt/webhook_shipment_history_testing/logback.xml /var/lib/jenkins/workspace/Webhook-ALL/webhook_shipment_history_testing/src/main/resources/logback.xml'
+                sh 'cd /var/lib/jenkins/workspace/Webhook-ALL && sudo ./gradlew webhook_shipment_history_testing:bootjar'
+                sh 'sudo rm -rf /mnt/webhook_shipment_history_testing/webhook_shipment_history_testing-0.0.1-SNAPSHOT.jar && sudo cp /var/lib/jenkins/workspace/Webhook-ALL/webhook_shipment_history_testing/build/libs/*.jar /mnt/webhook_shipment_history_testing/ && sudo chown jenkins. /mnt/webhook_shipment_history_testing/*.jar '
+                sh 'aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 722124002401.dkr.ecr.ap-south-1.amazonaws.com && cd /mnt/webhook_shipment_history_testing && sudo docker build --no-cache -t webhook_shipment_history_testing -f Dockerfile .'
+                sh 'docker tag webhook_shipment_history_testing:latest 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_shipment_history_testing:$(aws ecr describe-images --repository-name webhook_shipment_history_testing  --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\') && docker push 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_shipment_history_testing:$(aws ecr describe-images --repository-name webhook_shipment_history_testing --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\')'
+                sh 'aws eks update-kubeconfig --name sd2-midmile-consumer --region ap-south-1'
+                sh 'kubectl get ns'
+                sh '''
+                #!/bin/bash
+                cd /mnt/webhook_shipment_history_testing/
+                get_cur_ver=`cat deployment.yaml |grep "image:"|awk -F":" '{print $NF}'` 
+                ecr_ver=`sudo aws ecr describe-images --repository-name webhook_shipment_history_testing --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageTags[0]'|tr -d '"'`
+                if awk "BEGIN {exit ! ($ecr_ver > $get_cur_ver)}"
+                then
+                sed -i 's/:'"$get_cur_ver"'/:'"$ecr_ver"'/g' deployment.yaml
+                kubectl apply -f deployment.yaml -n webhook
+                echo "Yes Version is updated successfully"
+                else
+                echo "Version not Updated"
+                exit
+                fi
+                exit 0
+                << EOF
+                '''
+                sh '''
+                #!/usr/bin/bash
+                sudo ssh -i /opt/key.pem ubuntu@172.31.9.221 << EOF
+                sudo -i
+                cd /opt/yaml/webhook_shipment_history_testing
+                bash version_upgrade.sh
+                exit 0
+                <<EOF
+                '''
+                
+                }else if (SelectPipeline == 'webhook_shipment_lifecycle'){
+                sh 'sudo cp /mnt/webhook_shipment_lifecycle/bootstrap.properties /var/lib/jenkins/workspace/Webhook-ALL/webhook_shipment_lifecycle_kafka_consumer_service/src/main/resources/bootstrap.properties'
+                sh 'sudo cp /mnt/webhook_shipment_lifecycle/logback.xml /var/lib/jenkins/workspace/Webhook-ALL/webhook_shipment_lifecycle_kafka_consumer_service/src/main/resources/logback.xml'
+                sh 'cd /var/lib/jenkins/workspace/Webhook-ALL && sudo ./gradlew webhook_shipment_lifecycle_kafka_consumer_service:bootjar'
+                sh 'sudo rm -rf /mnt/webhook_shipment_lifecycle/webhook_shipment_lifecycle_kafka_consumer_service-0.0.1-SNAPSHOT.jar && sudo cp /var/lib/jenkins/workspace/Webhook-ALL/webhook_shipment_lifecycle_kafka_consumer_service/build/libs/*.jar /mnt/webhook_shipment_lifecycle/ && sudo chown jenkins. /mnt/webhook_shipment_lifecycle/*.jar '
+                sh 'aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 722124002401.dkr.ecr.ap-south-1.amazonaws.com && cd /mnt/webhook_shipment_lifecycle && sudo docker build --no-cache -t webhook_shipment_lifecycle -f Dockerfile .'
+                sh 'docker tag webhook_shipment_lifecycle:latest 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_shipment_lifecycle:$(aws ecr describe-images --repository-name webhook_shipment_lifecycle  --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\') && docker push 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_shipment_lifecycle:$(aws ecr describe-images --repository-name webhook_shipment_lifecycle --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\')'
+                sh 'aws eks update-kubeconfig --name sd2-midmile-consumer --region ap-south-1'
+                sh 'kubectl get ns'
+                sh '''
+                #!/bin/bash
+                cd /mnt/webhook_shipment_lifecycle/
+                get_cur_ver=$(grep "image:" deployment.yaml | awk -F":" '{print $NF}' | awk '{print $1}' | awk '{print $1}' | head -n 1)
+                ecr_ver=\$(aws ecr describe-images --repository-name webhook_shipment_lifecycle --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' | tr -d '"')
+                if awk "BEGIN {exit ! (\$ecr_ver > \$get_cur_ver)}"
+                then
+                sed -i "s|722124002401\\.dkr\\.ecr\\.ap-south-1\\.amazonaws\\.com/webhook_shipment_lifecycle:\${get_cur_ver}|722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_shipment_lifecycle:\${ecr_ver}|g" deployment.yaml
+                kubectl apply -f deployment.yaml -n webhook
+                echo "Yes, Version is updated successfully"
+                else
+                echo "Version not updated"
+                exit
+                fi
+                exit 0
+                << EOF
+                '''
+                }else if (SelectPipeline == 'webhook_event_archival_consumer_service'){
+                sh 'sudo cp /mnt/webhook_event_archival_consumer_service/bootstrap.properties /var/lib/jenkins/workspace/Webhook-ALL/webhook_event_archival_consumer_service/src/main/resources/bootstrap.properties'
+                sh 'sudo cp /mnt/webhook_event_archival_consumer_service/logback.xml /var/lib/jenkins/workspace/Webhook-ALL/webhook_event_archival_consumer_service/src/main/resources/logback.xml'
+                sh 'cd /var/lib/jenkins/workspace/Webhook-ALL && sudo ./gradlew webhook_event_archival_consumer_service:bootjar'
+                sh 'sudo rm -rf /mnt/webhook_event_archival_consumer_service/webhook_event_archival_consumer_service-0.0.1-SNAPSHOT.jar && sudo cp /var/lib/jenkins/workspace/Webhook-ALL/webhook_event_archival_consumer_service/build/libs/*.jar /mnt/webhook_event_archival_consumer_service/ && sudo chown jenkins. /mnt/webhook_event_archival_consumer_service/*.jar '
+                sh 'aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 722124002401.dkr.ecr.ap-south-1.amazonaws.com && cd /mnt/webhook_event_archival_consumer_service && sudo docker build --no-cache -t webhook_event_archival_consumer_service -f Dockerfile .'
+                sh 'docker tag webhook_event_archival_consumer_service:latest 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_event_archival_consumer_service:$(aws ecr describe-images --repository-name webhook_event_archival_consumer_service  --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\') && docker push 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_event_archival_consumer_service:$(aws ecr describe-images --repository-name webhook_event_archival_consumer_service --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\')'
+                sh 'aws eks update-kubeconfig --name sd2-midmile-consumer --region ap-south-1'
+                sh 'kubectl get ns'
+                sh '''
+                #!/bin/bash
+                cd /mnt/webhook_event_archival_consumer_service/
+                get_cur_ver=$(grep "image:" deployment.yaml | awk -F":" '{print $NF}' | awk '{print $1}' | awk '{print $1}' | head -n 1)
+                ecr_ver=\$(aws ecr describe-images --repository-name webhook_event_archival_consumer_service --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' | tr -d '"')
+                if awk "BEGIN {exit ! (\$ecr_ver > \$get_cur_ver)}"
+                then
+                sed -i "s|722124002401\\.dkr\\.ecr\\.ap-south-1\\.amazonaws\\.com/webhook_event_archival_consumer_service:\${get_cur_ver}|722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_event_archival_consumer_service:\${ecr_ver}|g" deployment.yaml
+                kubectl apply -f deployment.yaml -n webhook
+                echo "Yes, Version is updated successfully"
+                else
+                echo "Version not updated"
+                exit
+                fi
+                exit 0
+                << EOF
+                '''
+                }else if (SelectPipeline == 'webhook_sftp_consumer_service'){
+                sh 'sudo cp /mnt/webhook_sftp_consumer_service/bootstrap.properties /var/lib/jenkins/workspace/Webhook-ALL/webhook_sftp_consumer_service/src/main/resources/bootstrap.properties'
+                sh 'sudo cp /mnt/webhook_sftp_consumer_service/logback.xml /var/lib/jenkins/workspace/Webhook-ALL/webhook_sftp_consumer_service/src/main/resources/logback.xml'
+                sh 'cd /var/lib/jenkins/workspace/Webhook-ALL && sudo ./gradlew webhook_sftp_consumer_service:bootjar'
+                sh 'sudo rm -rf /mnt/webhook_sftp_consumer_service/webhook_sftp_consumer_service-0.0.1-SNAPSHOT.jar && sudo cp /var/lib/jenkins/workspace/Webhook-ALL/webhook_sftp_consumer_service/build/libs/*.jar /mnt/webhook_sftp_consumer_service/ && sudo chown jenkins. /mnt/webhook_sftp_consumer_service/*.jar '
+                sh 'aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 722124002401.dkr.ecr.ap-south-1.amazonaws.com && cd /mnt/webhook_sftp_consumer_service && sudo docker build --no-cache -t webhook_sftp_consumer_service -f Dockerfile .'
+                sh 'docker tag webhook_sftp_consumer_service:latest 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_sftp_consumer_service:$(aws ecr describe-images --repository-name webhook_sftp_consumer_service  --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\') && docker push 722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_sftp_consumer_service:$(aws ecr describe-images --repository-name webhook_sftp_consumer_service --query \'imageDetails[*].imageTags[ * ]\' --output text|sort -r |head -n 1|awk \'{print $1 + 0.01}\')'
+                sh 'aws eks update-kubeconfig --name sd2-midmile-consumer --region ap-south-1'
+                sh 'kubectl get ns'
+                sh '''
+                #!/bin/bash
+                cd /mnt/webhook_sftp_consumer_service/
+                get_cur_ver=$(grep "image:" deployment.yaml | awk -F":" '{print $NF}' | awk '{print $1}' | awk '{print $1}' | head -n 1)
+                ecr_ver=\$(aws ecr describe-images --repository-name webhook_sftp_consumer_service --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' | tr -d '"')
+                if awk "BEGIN {exit ! (\$ecr_ver > \$get_cur_ver)}"
+                then
+                sed -i "s|722124002401\\.dkr\\.ecr\\.ap-south-1\\.amazonaws\\.com/webhook_sftp_consumer_service:\${get_cur_ver}|722124002401.dkr.ecr.ap-south-1.amazonaws.com/webhook_sftp_consumer_service:\${ecr_ver}|g" deployment.yaml
+                kubectl apply -f deployment.yaml -n webhook
+                echo "Yes, Version is updated successfully"
+                else
+                echo "Version not updated"
+                exit
+                fi
+                exit 0
+                << EOF
+                '''
+                }
+            }
+        }
+   }
+}
+}
